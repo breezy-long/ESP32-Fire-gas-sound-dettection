@@ -1,0 +1,183 @@
+/****************************************************
+ * FIRE, GAS & SOUND DETECTION SYSTEM (ESP32)
+ * IoT-based Safety Monitoring using Blynk
+ ****************************************************/
+
+#define BLYNK_TEMPLATE_ID "TMPL2tgQ9YN9Q"
+#define BLYNK_TEMPLATE_NAME "SMOKE AND FLAME DETECTION SYSTEM"
+#define BLYNK_PRINT Serial  // Enables debugging via Serial Monitor
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+/***** Blynk and WiFi Credentials (ADD YOUR OWN) *****/
+char auth[] = "YOUR_BLYNK_AUTH_TOKEN";
+char ssid[] = "YOUR_WIFI_NAME";
+char pass[] = "YOUR_WIFI_PASSWORD";
+
+/***** Sensor and Component Pins *****/
+#define MQ6_PIN         35    // MQ-6 Gas Sensor (Analog)
+#define FLAME_PIN       32    // Flame Sensor (Digital)
+#define SOUND_DIGITAL   34    // Sound Sensor D0 (Clap detection)
+#define SOUND_ANALOG    33    // Sound Sensor A0 (Scream level)
+#define LED_PIN         26    // LED Indicator
+#define BUZZER_PIN      27    // Buzzer
+
+/***** Threshold Values *****/
+const int GAS_THRESHOLD = 300;                 // Gas threshold (ppm)
+const int SOUND_SCREAM_THRESHOLD = 600;        // Scream threshold
+const unsigned long SCREAM_MIN_DURATION = 400; // ms above threshold
+
+/***** Global Variables *****/
+int gasReading = 0;
+bool flameDetected = false;
+bool lastDigState = LOW;
+unsigned long screamStartTime = 0;
+bool screaming = false;
+
+/***** LCD Display *****/
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+/***** Timer *****/
+BlynkTimer timer;
+
+/***** Function Prototypes *****/
+void sensorRead();
+void checkClap();
+void checkScream();
+void handleClap();
+void handleScream();
+
+void setup() {
+  Serial.begin(115200);
+
+  // LCD startup sequence
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WIFI");
+
+  // WiFi Connection
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  lcd.clear();
+  lcd.print("WIFI Connected");
+  delay(1000);
+
+  // Blynk Connection
+  lcd.clear();
+  lcd.print("Connecting Blynk");
+  Blynk.config(auth);
+  while (!Blynk.connect()) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  lcd.clear();
+  lcd.print("Blynk Connected");
+  delay(1000);
+
+  lcd.clear();
+  lcd.print("SYSTEM READY");
+  delay(1000);
+  lcd.clear();
+
+  // Pin configuration
+  pinMode(MQ6_PIN, INPUT);
+  pinMode(FLAME_PIN, INPUT);
+  pinMode(SOUND_DIGITAL, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  // Timer
+  timer.setInterval(1000L, sensorRead);
+}
+
+void loop() {
+  checkClap();
+  checkScream();
+  Blynk.run();
+  timer.run();
+}
+
+/***** Sensor Read Function *****/
+void sensorRead() {
+  gasReading = analogRead(MQ6_PIN);
+  int gasPPM = map(gasReading, 0, 4095, 0, 1000);
+
+  flameDetected = (digitalRead(FLAME_PIN) == LOW);
+
+  // Blynk Updates
+  Blynk.virtualWrite(V0, gasPPM);
+  Blynk.virtualWrite(V3, gasPPM);
+  Blynk.virtualWrite(V1, flameDetected ? "Flame Detected" : "No Flame");
+  Blynk.virtualWrite(V4, "No Unusual sound detected");
+
+  // LCD Updates
+  lcd.setCursor(0, 0);
+  lcd.print(gasPPM > GAS_THRESHOLD ? "Gas Danger!   " : "Gas Safe      ");
+  lcd.setCursor(0, 1);
+  lcd.print(flameDetected ? "Flame Detected" : "Flame Safe    ");
+
+  // Alarm Control
+  if (gasPPM > GAS_THRESHOLD || flameDetected) {
+    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
+  } else {
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+/***** Clap Detection *****/
+void checkClap() {
+  bool curState = digitalRead(SOUND_DIGITAL);
+  if (curState == HIGH && lastDigState == LOW) {
+    handleClap();
+    delay(250);
+  }
+  lastDigState = curState;
+}
+
+/***** Scream Detection *****/
+void checkScream() {
+  int lvl = analogRead(SOUND_ANALOG);
+  if (lvl > SOUND_SCREAM_THRESHOLD) {
+    if (!screaming) {
+      screamStartTime = millis();
+      screaming = true;
+    } else if (millis() - screamStartTime >= SCREAM_MIN_DURATION) {
+      handleScream();
+      screaming = false;
+      delay(500);
+    }
+  } else {
+    screaming = false;
+  }
+}
+
+/***** Sound Event Handlers *****/
+void handleClap() {
+  Blynk.virtualWrite(V4, "Unusual sound detected");
+  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void handleScream() {
+  Blynk.virtualWrite(V4, "Unusual sound detected");
+  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+}
